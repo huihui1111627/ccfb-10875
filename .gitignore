@@ -16,3 +16,16 @@ node_modules/
 __pycache__/
 .venv/
 venv/
+
+# Go 构建产物
+/engine
+/cmd/engine/engine
+*.test
+*.out
+
+# 运行数据（话单/任务/oracle 输出，体积大，不入库）
+/data/
+*.fixed
+*.delim
+*.asn1
+*.lpbin

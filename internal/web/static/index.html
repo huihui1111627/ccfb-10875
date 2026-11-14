@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批价引擎运营台</title>
+<style>
+:root {
+  --bg: #0f1420; --panel: #182033; --panel2: #1f2a42; --line: #2a3856;
+  --text: #e6ecf7; --muted: #8da0c0; --accent: #4f8cff; --green: #34d399;
+  --red: #f87171; --amber: #fbbf24; --purple: #a78bfa;
+}
+* { box-sizing: border-box; }
+body { margin:0; font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg); color: var(--text); }
+header { display:flex; align-items:center; gap:24px; padding:14px 24px;
+  background: var(--panel); border-bottom:1px solid var(--line); }
+header h1 { font-size:18px; margin:0; }
+nav { display:flex; gap:4px; flex-wrap:wrap; }
+nav button { background:transparent; border:1px solid transparent; color:var(--muted);
+  padding:8px 16px; border-radius:8px; cursor:pointer; font-size:14px; }
+nav button:hover { color:var(--text); background:var(--panel2); }
+nav button.active { color:#fff; background:var(--accent); }
+main { padding:24px; max-width:1400px; margin:0 auto; }
+.grid { display:grid; gap:16px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
+.card h2 { margin:0 0 14px; font-size:15px; color:var(--muted); font-weight:600; }
+.kpi .num { font-size:28px; font-weight:700; }
+.kpi .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+tr:hover td { background:var(--panel2); }
+.table-wrap { max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+.badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px; }
+.b-DONE { background:rgba(52,211,153,.15); color:var(--green); }
+.b-RUNNING { background:rgba(79,140,255,.18); color:var(--accent); }
+.b-FAILED { background:rgba(248,113,113,.15); color:var(--red); }
+.b-PENDING { background:rgba(251,191,36,.15); color:var(--amber); }
+.b-E1_BAD_FORMAT,.b-E2_BAD_TIME,.b-E3_BAD_QUANTITY { background:rgba(248,113,113,.15); color:var(--red); }
+.b-E4_NO_SUBSCRIPTION,.b-E5_BAD_SEGMENT { background:rgba(251,191,36,.15); color:var(--amber); }
+button.btn { background:var(--accent); color:#fff; border:0; border-radius:8px;
+  padding:8px 18px; cursor:pointer; font-size:13px; }
+button.btn:hover { filter:brightness(1.1); }
+button.btn.ghost { background:var(--panel2); color:var(--text); border:1px solid var(--line); }
+input,select { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+  border-radius:8px; padding:8px 10px; font-size:13px; }
+.toolbar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+.bar-row { display:flex; align-items:center; gap:10px; margin:8px 0; }
+.bar-label { width:130px; color:var(--muted); font-size:12px; text-align:right; }
+.bar-track { flex:1; background:var(--panel2); border-radius:6px; height:22px; position:relative; overflow:hidden; }
+.bar-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--purple));
+  border-radius:6px; display:flex; align-items:center; padding-left:8px; font-size:12px; min-width:40px; }
+.muted { color:var(--muted); }
+.mono { font-family:ui-monospace,Menlo,monospace; }
+.fee-pos { color:var(--red); } .fee-neg { color:var(--green); }
+details { margin:6px 0; } summary { cursor:pointer; color:var(--accent); }
+.pill { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+  padding:2px 8px; margin:2px; display:inline-block; font-size:12px; }
+.toast { position:fixed; bottom:24px; right:24px; background:var(--panel2);
+  border:1px solid var(--line); padding:12px 20px; border-radius:10px; opacity:0;
+  transition:opacity .3s; z-index:99; }
+.toast.show { opacity:1; }
+.shard-grid { display:grid; grid-template-columns:repeat(16,1fr); gap:3px; }
+.shard-cell { aspect-ratio:1; border-radius:3px; }
+.sc-DONE { background:var(--green); } .sc-RUNNING { background:var(--accent); }
+.sc-FAILED { background:var(--red); } .sc-PENDING { background:var(--panel2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>📶 批价引擎运营台</h1>
+  <nav id="nav"></nav>
+  <span class="muted" style="margin-left:auto" id="clock"></span>
+</header>
+<main id="app"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+const TABS = [
+  ['overview','总览'], ['ingest','话单接入'], ['tariff','资费配置'],
+  ['tasks','批价任务'], ['recompute','重算对比'], ['exceptions','异常话单']
+];
+let state = { tab:'overview', taskId:null, timer:null };
+
+async function api(path, opts) {
+  const r = await fetch(API+path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(()=>({error:r.statusText}))).error);
+  return r.json();
+}
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+function fmtFee(li) { return (li/100000).toFixed(2)+' 元'; }
+function fmtNum(n) { return (n??0).toLocaleString(); }
+function esc(s) { return String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function badge(status) { return `<span class="badge b-${status}">${status}</span>`; }
+function setTab(tab) {
+  state.tab = tab; renderNav(); render();
+  if (state.timer) clearInterval(state.timer);
+  if (tab==='tasks' || tab==='overview') state.timer = setInterval(render, 4000);
+}
+function renderNav() {
+  document.getElementById('nav').innerHTML = TABS.map(([k,n])=>
+    `<button class="${state.tab===k?'active':''}" onclick="setTab('${k}')">${n}</button>`).join('');
+}
+document.getElementById('clock').textContent = new Date().toLocaleString('zh-CN');
+setInterval(()=>document.getElementById('clock').textContent=new Date().toLocaleString('zh-CN'),1000);
+
+// ---------- 总览 ----------
+async function viewOverview() {
+  const o = await api('/api/overview');
+  const reasonBadges = Object.entries(o.exception_by_reason).sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>`<span class="badge b-${k}">${k}: ${fmtNum(v)}</span>`).join(' ') || '<span class="muted">无</span>';
+  document.getElementById('app').innerHTML = `
+    <div class="grid grid-4">
+      <div class="card kpi"><h2>任务总数</h2><div class="num">${o.task_count}</div><div class="sub">含批价/重算</div></div>
+      <div class="card kpi"><h2>有效批价话单</h2><div class="num">${fmtNum(o.latest_rated_cdrs)}</div><div class="sub">累计 rated 条数</div></div>
+      <div class="card kpi"><h2>去重话单</h2><div class="num" style="color:var(--amber)">${fmtNum(o.duplicate_cdrs)}</div><div class="sub">record_id 重复</div></div>
+      <div class="card kpi"><h2>异常话单</h2><div class="num" style="color:var(--red)">${fmtNum(o.exception_cdrs)}</div><div class="sub">E1~E5</div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2>异常原因分布</h2><div>${reasonBadges}</div></div>
+    <div class="card" style="margin-top:16px"><h2>快捷入口</h2>
+      <button class="btn" onclick="setTab('tasks')">查看批价任务</button>
+      <button class="btn ghost" onclick="setTab('recompute')">发起重算</button>
+      <button class="btn ghost" onclick="setTab('exceptions')">异常话单</button>
+    </div>`;
+}
+
+// ---------- 话单接入 ----------
+async function viewIngest() {
+  const files = await api('/api/inbox');
+  const rows = files.map(f=>`<tr><td class="mono">${esc(f.name)}</td>
+    <td>${f.name.split('.').pop().toUpperCase()}</td><td>${fmtNum(f.size)} B</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">inbox 目录为空</td></tr>';
+  document.getElementById('app').innerHTML = `
+    <div class="card"><h2>话单接入（inbox 目录，支持 fixed / delimited / asn1 / lpbin）</h2>
+      <div class="toolbar">
+        <label>分片数 <input id="shards" type="number" value="64" style="width:90px"></label>
+        <label>并行度 <input id="parallel" type="number" value="0" style="width:90px" title="0=CPU核数"></label>
+        <button class="btn" onclick="createTask()">▶ 新建批价任务</button>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>文件</th><th>格式</th><th>大小</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div>`;
+}
+async function createTask() {
+  const shards = +document.getElementById('shards').value || 64;
+  const parallel = +document.getElementById('parallel').value || 0;
+  const t = await api('/api/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({shards, parallel})});
+  toast('任务已启动: '+t.task_id); setTab('tasks');
+}
+
+// ---------- 资费配置 ----------
+async function viewTariff() {
+  const [tariffs, subs] = await Promise.all([api('/api/tariffs'), api('/api/subscriptions')]);
+  const tRows = tariffs.map(t=>`<tr>
+    <td class="mono">${esc(t.plan_id)}</td><td>${esc(t.version)}</td>
+    <td class="mono">${esc(t.effective_start)}</td><td class="mono">${esc(t.effective_end)}</td>
+    <td>${t.services.map(s=>`<span class="pill">${s}</span>`).join('')}</td>
+    <td><button class="btn ghost" onclick="showPlan('${t.plan_id}')">详情</button></td></tr>`).join('');
+  const subRows = subs.slice(0,300).map(s=>`<tr>
+    <td class="mono">${esc(s.user_id)}</td><td>${esc(s.service)}</td>
+    <td class="mono">${esc(s.plan_id)}</td>
+    <td class="mono">${esc(s.effective_start)}</td><td class="mono">${esc(s.effective_end)}</td></tr>`).join('');
+  document.getElementById('app').innerHTML = `
+    <div class="card"><h2>资费计划版本（阶梯价 / 免费额度 / 夜间 / 漫游）</h2>
+      <div class="table-wrap"><table><thead><tr><th>计划</th><th>版本</th><th>生效起</th><th>生效止</th><th>业务</th><th></th></tr></thead>
+      <tbody>${tRows||'<tr><td colspan="6" class="muted">无资费配置</td></tr>'}</tbody></table></div>
+      <div id="planDetail" style="margin-top:14px"></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2>用户订阅（前 300 行，支持 ?user= 过滤）</h2>
+      <div class="table-wrap"><table><thead><tr><th>用户</th><th>业务</th><th>套餐</th><th>生效起</th><th>生效止</th></tr></thead>
+      <tbody>${subRows||'<tr><td colspan="5" class="muted">无订阅</td></tr>'}</tbody></table></div>
+    </div>`;
+}
+async function showPlan(plan) {
+  const versions = await api('/api/tariffs/'+encodeURIComponent(plan));
+  document.getElementById('planDetail').innerHTML = versions.map(v=>`
+    <details open><summary>${esc(v.plan_id)} / ${esc(v.version)}
+      <span class="muted">(${esc(v.effective_start)} ~ ${esc(v.effective_end)})</span></summary>
+    ${Object.entries(v.services).map(([svc,cfg])=>`
+      <div class="card" style="margin:8px 0;background:var(--panel2)">
+        <strong>${svc}</strong>
+        <span class="pill">单位大小 ${cfg.unit_size}</span>
+        <span class="pill">免费额度 ${cfg.allowance_units}</span>
+        ${cfg.night_window?`<span class="pill">夜间 ${cfg.night_window.join('~')} ×${(cfg.night_factor/10000).toFixed(2)}</span>`:''}
+        ${cfg.roaming_factor?`<span class="pill">漫游 ×${(cfg.roaming_factor/10000).toFixed(2)}</span>`:''}
+        <table style="margin-top:8px"><thead><tr><th>阶梯上限(单位,-1=∞)</th><th>单价(厘)</th></tr></thead>
+        <tbody>${cfg.tiers.map(t=>`<tr><td>${t.upto}</td><td class="mono">${t.rate}</td></tr>`).join('')}</tbody></table>
+      </div>`).join('')}
+    </details>`).join('');
+}
+
+// ---------- 批价任务 ----------
+async function viewTasks() {
+  const tasks = await api('/api/tasks');
+  const rows = tasks.map(t=>{
+    const done = t.shards.filter(s=>s.status==='DONE').length;
+    return `<tr>
+      <td class="mono">${esc(t.task_id)}</td><td>${esc(t.kind)}</td>
+      <td>${badge(t.status)}</td><td>${done}/${t.shard_count}</td>
+      <td class="mono">${esc(t.created_at)}</td>
+      <td><button class="btn ghost" onclick="openTask('${t.task_id}')">详情</button>
+          ${t.status==='FAILED'?`<button class="btn" onclick="retryTask('${t.task_id}')">续跑</button>`:''}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('app').innerHTML = `
+    <div class="card"><h2>批价任务（分片并行 · 失败可从失败分片续跑）</h2>
+      <div class="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>分片完成</th><th>创建时间</th><th>操作</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="6" class="muted">暂无任务</td></tr>'}</tbody></table></div>
+      <div id="taskDetail" style="margin-top:16px"></div>
+    </div>`;
+  if (state.taskId) openTask(state.taskId);
+}
+async function retryTask(id) {
+  await api('/api/tasks/'+id+'/retry', {method:'POST'});
+  toast('续跑已启动'); openTask(id);
+}
+async function openTask(id) {
+  state.taskId = id;
+  const [{task:t, reconcile:rec}, shards] = await Promise.all([
+    api('/api/tasks/'+id), api('/api/tasks/'+id+'/shards')]);
+  const maxMs = Math.max(1, ...t.stages.map(s=>s.elapsed_ms));
+  const stageBars = t.stages.map(s=>`
+    <div class="bar-row">
+      <div class="bar-label">${s.name}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4,s.elapsed_ms/maxMs*100)}%">
+        ${s.elapsed_ms} ms</div></div>
+      <div class="muted mono" style="width:260px">in=${fmtNum(s.input_count)} out=${fmtNum(s.output_count)} err=${fmtNum(s.error_count)}</div>
+    </div>`).join('') || '<p class="muted">暂无阶段数据</p>';
+  const shardGrid = shards.map(s=>`<div class="shard-cell sc-${s.status}" title="shard ${s.shard} ${s.status} rated=${s.rated_count} dup=${s.dup_count} ex=${s.exception_count}"></div>`).join('');
+  const recBlock = rec && Object.keys(rec).length ? `
+    <div class="card" style="margin-top:12px"><h2>账务对平（rated 明细 ↔ 汇总）</h2>
+      <p>rated 费用合计 <strong class="mono">${fmtNum(rec.rated_fee_sum)}</strong> 厘 /
+         汇总费用合计 <strong class="mono">${fmtNum(rec.summary_fee_sum)}</strong> 厘 —
+         ${rec.balanced?'<span style="color:var(--green)">✓ 对平</span>':'<span style="color:var(--red)">✗ 不平</span>'}</p>
+      <p class="muted">账期月总额: ${Object.entries(rec.month_totals||{}).map(([m,v])=>
+        `<span class="pill mono">${m}: ${fmtNum(v)}</span>`).join('')}</p>
+      <button class="btn ghost" onclick="runReconcile('${id}')">与 oracle 独立应收对账</button>
+      <div id="oracleRep"></div>
+    </div>` : '';
+  document.getElementById('taskDetail').innerHTML = `
+    <div class="card"><h2>任务 ${esc(t.task_id)} — 阶段耗时可视化</h2>${stageBars}</div>
+    <div class="card" style="margin-top:12px"><h2>分片状态网格（${t.shard_count} 片，绿=完成 蓝=运行 红=失败 灰=待跑）</h2>
+      <div class="shard-grid">${shardGrid}</div></div>
+    ${recBlock}`;
+}
+async function runReconcile(id) {
+  const rep = await api('/api/reconcile/'+id, {method:'POST'});
+  const head = rep.balanced
+    ? '<p style="color:var(--green);font-size:16px">✓ 与独立应收完全对平（逐用户×月金额一致）</p>'
+    : `<p style="color:var(--red);font-size:16px">✗ 发现 ${rep.mismatch_rows} 条差异</p>`;
+  const rows = rep.mismatches.slice(0,50).map(m=>`<tr>
+    <td class="mono">${esc(m.user_id)}</td><td>${esc(m.bill_month)}</td>
+    <td><span class="badge b-${m.kind.startsWith('MISSING')?'E1_BAD_FORMAT':'E5_BAD_SEGMENT'}">${m.kind}</span></td>
+    <td class="mono">${fmtNum(m.engine_fee)}</td><td class="mono">${fmtNum(m.oracle_fee)}</td>
+    <td class="mono"><strong class="${m.diff>0?'fee-pos':'fee-neg'}">${fmtNum(m.diff)}</strong></td></tr>`).join('');
+  document.getElementById('oracleRep').innerHTML = `
+    <div style="margin-top:12px">${head}
+    <p class="muted">引擎总额 ${fmtNum(rep.engine_total_fee)} 厘 · oracle 总额 ${fmtNum(rep.oracle_total_fee)} 厘
+       · 匹配行 ${rep.matched_rows} / 引擎行 ${rep.engine_rows} / oracle 行 ${rep.oracle_rows}</p>
+    ${rows?`<div class="table-wrap"><table><thead><tr><th>用户</th><th>账期月</th><th>差异类型</th><th>引擎(厘)</th><th>oracle(厘)</th><th>差额(厘)</th></tr></thead><tbody>${rows}</tbody></table></div>`:''}
+    </div>`;
+}
+
+// ---------- 重算对比 ----------
+async function viewRecompute() {
+  const tasks = (await api('/api/tasks')).filter(t=>t.kind==='rating');
+  const opts = tasks.map(t=>`<option value="${esc(t.task_id)}">${esc(t.task_id)} (${t.status})</option>`).join('');
+  document.getElementById('app').innerHTML = `
+    <div class="card"><h2>资费变更重算（指定时间窗，输出每用户差额）</h2>
+      <div class="toolbar">
+        <label>原任务 <select id="oldTask">${opts}</select></label>
+        <label>窗口起 <input id="winStart" type="text" value="2026-10-01T00:00:00Z" style="width:210px"></label>
+        <label>窗口止 <input id="winEnd" type="text" value="2026-11-01T00:00:00Z" style="width:210px"></label>
+        <button class="btn" onclick="doRecompute()">🔁 发起重算</button>
+      </div>
+      <p class="muted">重算为独立任务目录，不覆盖原结果；完成后差额写入 deltas.jsonl。</p>
+      <div id="deltaList"></div>
+    </div>`;
+  const recTasks = (await api('/api/tasks')).filter(t=>t.kind==='recompute');
+  if (recTasks.length) {
+    const rows = recTasks.map(t=>`<tr>
+      <td class="mono">${esc(t.task_id)}</td><td>${badge(t.status)}</td>
+      <td class="mono">${esc(t.params.old_task||'')}</td>
+      <td class="mono">${esc(t.params.window_start||'')} ~ ${esc(t.params.window_end||'')}</td>
+      <td><button class="btn ghost" onclick="showDeltas('${t.task_id}')">查看差额</button></td></tr>`).join('');
+    document.getElementById('deltaList').innerHTML = `
+      <h2 style="margin-top:18px">历史重算任务</h2>
+      <div class="table-wrap"><table><thead><tr><th>重算任务</th><th>状态</th><th>原任务</th><th>窗口</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div><div id="deltaRows"></div>`;
+  }
+}
+async function doRecompute() {
+  const body = {
+    old_task: document.getElementById('oldTask').value,
+    start: document.getElementById('winStart').value,
+    end: document.getElementById('winEnd').value
+  };
+  const r = await api('/api/recompute', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  toast('重算已启动: '+r.task); setTimeout(()=>viewRecompute(), 3000);
+}
+async function showDeltas(id) {
+  const deltas = await api('/api/tasks/'+id+'/deltas');
+  if (!deltas.length) { document.getElementById('deltaRows').innerHTML='<p class="muted">无差额（资费变更未影响费用）或任务尚未完成</p>'; return; }
+  const total = deltas.reduce((a,d)=>a+d.delta,0);
+  const rows = deltas.slice(0,300).map(d=>`<tr>
+    <td class="mono">${esc(d.user_id)}</td><td>${esc(d.bill_month)}</td>
+    <td class="mono">${fmtNum(d.old_fee)}</td><td class="mono">${fmtNum(d.new_fee)}</td>
+    <td class="mono"><strong class="${d.delta>0?'fee-pos':'fee-neg'}">${d.delta>0?'+':''}${fmtNum(d.delta)}</strong></td>
+    <td>${Object.entries(d.service_delta||{}).map(([k,v])=>`<span class="pill">${k}: ${v>0?'+':''}${fmtNum(v)}</span>`).join('')}</td>
+    </tr>`).join('');
+  document.getElementById('deltaRows').innerHTML = `
+    <h2 style="margin-top:14px">差额明细（前 300 行，共 ${deltas.length} 个用户×月）—
+      总差额 <strong class="${total>0?'fee-pos':'fee-neg'}">${total>0?'+':''}${fmtNum(total)}</strong> 厘
+      （${(total/100000).toFixed(2)} 元）</h2>
+    <div class="table-wrap"><table><thead><tr><th>用户</th><th>账期月</th><th>原费用(厘)</th><th>新费用(厘)</th><th>差额(厘)</th><th>业务拆分</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+// ---------- 异常话单 ----------
+async function viewExceptions() {
+  const tasks = await api('/api/tasks');
+  const opts = tasks.map(t=>`<option value="${esc(t.task_id)}" ${state.taskId===t.task_id?'selected':''}>${esc(t.task_id)}</option>`).join('');
+  document.getElementById('app').innerHTML = `
+    <div class="card"><h2>异常话单（E1 格式 / E2 时间 / E3 用量 / E4 无订阅 / E5 拆段）</h2>
+      <div class="toolbar">
+        <label>任务 <select id="exTask" onchange="loadExceptions()">${opts}</select></label>
+        <label>原因 <select id="exReason" onchange="loadExceptions()">
+          <option value="">全部</option>
+          <option>E1_BAD_FORMAT</option><option>E2_BAD_TIME</option>
+          <option>E3_BAD_QUANTITY</option><option>E4_NO_SUBSCRIPTION</option>
+          <option>E5_BAD_SEGMENT</option></select></label>
+      </div>
+      <div id="exTable" class="table-wrap"><p class="muted" style="padding:12px">加载中…</p></div>
+    </div>`;
+  if (tasks.length) loadExceptions();
+}
+async function loadExceptions() {
+  const id = document.getElementById('exTask').value;
+  const reason = document.getElementById('exReason').value;
+  state.taskId = id;
+  const rows = await api('/api/tasks/'+id+'/exceptions'+(reason?'?reason='+reason:''));
+  document.getElementById('exTable').innerHTML = rows.length ? `<table><thead><tr>
+    <th>分片</th><th>原因</th><th>用户</th><th>记录号</th><th>阶段</th><th>详情</th><th>原文摘要</th></tr></thead><tbody>
+    ${rows.map(e=>`<tr><td>${e.shard}</td><td><span class="badge b-${e.reason}">${e.reason}</span></td>
+      <td class="mono">${esc(e.user_id)||'-'}</td><td class="mono">${esc(e.record_id)||'-'}</td>
+      <td>${esc(e.stage)}</td><td>${esc(e.detail)}</td>
+      <td class="mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis" title="${esc(e.raw_snippet)}">${esc(e.raw_snippet)}</td></tr>`).join('')}
+    </tbody></table>` : '<p class="muted" style="padding:12px">无异常话单 🎉</p>';
+}
+
+async function render() {
+  try {
+    ({overview:viewOverview, ingest:viewIngest, tariff:viewTariff,
+      tasks:viewTasks, recompute:viewRecompute, exceptions:viewExceptions}[state.tab] || viewOverview)();
+  } catch (e) { document.getElementById('app').innerHTML =
+    `<div class="card"><h2 style="color:var(--red)">加载失败</h2><p>${esc(e.message)}</p></div>`; }
+}
+renderNav(); render();
+</script>
+</body>
+</html>
